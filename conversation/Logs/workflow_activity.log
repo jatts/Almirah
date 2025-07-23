@@ -2,3 +2,4 @@
 2025-07-23 20:54:47 - Scanning.xlsx file received.
 [2025-07-23 20:55:16] Both files received. Starting initial merge.
 [2025-07-23 20:55:16] Merging complete. merging_temp.csv created. Version marker file (version.txt) created with content: DB_Version_20250723_205516.
+2025-07-23 20:57:11 - Final conversion workflow triggered by version.txt.

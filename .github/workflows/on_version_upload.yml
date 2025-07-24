@@ -1,0 +1,19 @@
+# .github/workflows/on_version_upload.yml
+name: On Version File Upload - Trigger Conversion
+
+on:
+  push:
+    paths:
+      - 'conversation/csv/version.txt' # Trigger when version.txt is uploaded
+
+jobs:
+  log_version_upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Log Version.txt File Received
+        run: |
+          mkdir -p conversation/Logs || true # Ensure Logs directory exists
+          echo "$(date +"%Y-%m-%d %H:%M:%S") - Version.txt file received. Initiating final conversion." >> conversation/Logs/workflow_activity.log
+          # NO git add, commit, push here.

@@ -4,7 +4,7 @@ name: Final Conversion Workflow
 on:
   push:
     paths:
-      - 'conversation/csv/version.txt'
+      - 'conversation/csv/version.txt' # Trigger when version.txt is uploaded
 
 jobs:
   run_final_conversion:
@@ -20,7 +20,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure token is available
         run: |
-          mkdir -p conversation/Logs # Changed folder name
+          mkdir -p conversation/Logs # Ensure Logs directory exists
           LOG_FILE="conversation/Logs/workflow_activity.log"
           echo "$(date +"%Y-%m-%d %H:%M:%S") - Final conversion workflow triggered by version.txt." >> "$LOG_FILE"
           git config user.name "github-actions"
@@ -45,11 +45,15 @@ jobs:
           VERSION_FILE="conversation/csv/version.txt"
           
           if [ ! -f "$SCANNING_FILE" ]; then
-            echo "Error: scanning.xlsx not found. Aborting final conversion."
-            exit 1
+            echo "Error: scanning.xlsx not found at $SCANNING_FILE. Aborting final conversion."
+            # We exit with a success code (0) here, but mark the step as failed for clarity,
+            # to prevent subsequent steps from running if the file is truly missing,
+            # but not fail the entire workflow if it's an expected condition (e.g. initial run).
+            # However, for a critical file like this, an exit 1 is generally better.
+            exit 1 
           fi
           if [ ! -f "$VERSION_FILE" ]; then
-            echo "Error: version.txt not found. Aborting final conversion."
+            echo "Error: version.txt not found at $VERSION_FILE. Aborting final conversion."
             exit 1
           fi
           echo "Both scanning.xlsx and version.txt found. Proceeding with final conversion."
@@ -106,8 +110,6 @@ jobs:
                   df["OriginalPrice"] = df["OriginalPrice"].apply(format_price)
 
               final_columns = ["Barcode", "Article", "Percentage", "OriginalPrice"]
-              # Ensure all columns exist before selecting, handle missing columns if necessary
-              # For now, assuming these columns will always be present in scanning.xlsx
               df = df[final_columns]
 
               db_target = f"conversation/Ready/{version_name}.db"
@@ -162,15 +164,13 @@ jobs:
           git add conversation/Ready/*.zip
           git add conversation/Logs/workflow_activity.log # Now empty or fresh
           
-          # Remove source files
-          git rm conversation/csv/scanning.xlsx || true
-          git rm conversation/csv/version.txt || true
+          # Only remove version.txt, keep scanning.xlsx
+          git rm conversation/csv/version.txt || true 
           
           if git diff --staged --quiet; then
               echo "No changes to commit from this final step."
           else
-              git commit -m "Finalized: Created ZIP, cleaned up source files, and reset log."
+              git commit -m "Finalized: Created ZIP, cleaned up version.txt, and reset log."
           fi
           
-          # Use --force to ensure the push goes through despite potential race conditions
           git push --force

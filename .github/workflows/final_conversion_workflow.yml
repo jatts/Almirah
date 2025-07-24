@@ -16,28 +16,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0 # Fetch all history
 
-      - name: Log Final Conversion Workflow Start
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure token is available
-        run: |
-          mkdir -p conversation/Logs # Ensure Logs directory exists
-          LOG_FILE="conversation/Logs/workflow_activity.log"
-          echo "$(date +"%Y-%m-%d %H:%M:%S") - Final conversion workflow triggered by version.txt." >> "$LOG_FILE"
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add "$LOG_FILE"
-          # Pull latest changes before committing. This is crucial for logs as other workflows might update them.
-          git pull --rebase origin main || true
-          
-          if ! git diff --staged --quiet; then
-              git commit -m "Log: Final workflow triggered."
-          else
-              echo "No new log entry commit from final workflow trigger."
-          fi
-          
-          git push --force-with-lease || echo "Log push failed for final workflow trigger."
-
-
       - name: Verify scanning.xlsx and version.txt exist
         id: check_files
         run: |
@@ -45,15 +23,11 @@ jobs:
           VERSION_FILE="conversation/csv/version.txt"
           
           if [ ! -f "$SCANNING_FILE" ]; then
-            echo "Error: scanning.xlsx not found at $SCANNING_FILE. Aborting final conversion."
-            # We exit with a success code (0) here, but mark the step as failed for clarity,
-            # to prevent subsequent steps from running if the file is truly missing,
-            # but not fail the entire workflow if it's an expected condition (e.g. initial run).
-            # However, for a critical file like this, an exit 1 is generally better.
-            exit 1 
+            echo "Error: scanning.xlsx not found. Aborting final conversion."
+            exit 1
           fi
           if [ ! -f "$VERSION_FILE" ]; then
-            echo "Error: version.txt not found at $VERSION_FILE. Aborting final conversion."
+            echo "Error: version.txt not found. Aborting final conversion."
             exit 1
           fi
           echo "Both scanning.xlsx and version.txt found. Proceeding with final conversion."
@@ -82,22 +56,24 @@ jobs:
           import sys
 
           try:
-              scanning_file_path = "conversation/csv/scanning.xlsx"
+              scanning_file_path = "conversation/csv/scanning.xlsx" # Only scanning.xlsx
               version_file_path = "conversation/csv/version.txt"
               log_path = "conversation/Logs/workflow_activity.log"
               
-              os.makedirs("conversation/Ready", exist_ok=True)
-              os.makedirs("conversation/Logs", exist_ok=True)
+              os.makedirs("conversation/Ready", exist_ok=True) # Ensure Ready directory exists
+              os.makedirs("conversation/Logs", exist_ok=True) # Ensure Logs directory exists
 
               with open(version_file_path, 'r') as f:
-                  version_name = f.read().strip()
+                  version_name = f.read().strip() # Read version from file
 
               with open(log_path, "a") as logfile:
                   now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
                   logfile.write(f"{now} Final Conversion Started for version: {version_name}.\n")
 
+              # Read the scanning file, it already contains all necessary data including prices
               df = pd.read_excel(scanning_file_path)
 
+              # Ensure OriginalPrice column is formatted as requested previously
               if "OriginalPrice" in df.columns:
                   df["OriginalPrice"] = pd.to_numeric(df["OriginalPrice"], errors='coerce')
                   def format_price(price):
@@ -109,8 +85,10 @@ jobs:
                           return str(price)
                   df["OriginalPrice"] = df["OriginalPrice"].apply(format_price)
 
+              # Define the final columns expected in the DB.
+              # Assuming Scanning.xlsx will contain Barcode, Article, Percentage, OriginalPrice
               final_columns = ["Barcode", "Article", "Percentage", "OriginalPrice"]
-              df = df[final_columns]
+              df = df[final_columns] # Select and reorder columns
 
               db_target = f"conversation/Ready/{version_name}.db"
               conn = sqlite3.connect(db_target)
@@ -130,7 +108,7 @@ jobs:
               with zipfile.ZipFile(zip_name, 'w', zipfile.ZIP_DEFLATED) as zipf:
                   zipf.write(db_target, os.path.basename(db_target))
 
-              os.remove(db_target)
+              os.remove(db_target) # Remove the .db file after zipping
 
               with open(log_path, "a") as logfile:
                   now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
@@ -139,7 +117,7 @@ jobs:
 
               # Reset the log file by truncating it
               with open(log_path, "w") as logfile:
-                  logfile.write("")
+                  logfile.write("") # Overwrite with empty content to make it fresh
               
           except Exception as e:
               log_path_error = "conversation/Logs/workflow_activity.log"
@@ -164,13 +142,15 @@ jobs:
           git add conversation/Ready/*.zip
           git add conversation/Logs/workflow_activity.log # Now empty or fresh
           
-          # Only remove version.txt, keep scanning.xlsx
-          git rm conversation/csv/version.txt || true 
+          # Remove source files
+          git rm conversation/csv/scanning.xlsx || true # Remove scanning.xlsx
+          git rm conversation/csv/version.txt || true   # Remove version.txt
           
+          # Commit the changes. Force push to handle potential race conditions if any.
           if git diff --staged --quiet; then
               echo "No changes to commit from this final step."
           else
-              git commit -m "Finalized: Created ZIP, cleaned up version.txt, and reset log."
+              git commit -m "Finalized: Created ZIP, cleaned up source files, and reset log."
           fi
           
           git push --force

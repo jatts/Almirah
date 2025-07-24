@@ -4,7 +4,7 @@ name: On Version File Upload - Trigger Conversion
 on:
   push:
     paths:
-      - 'conversation/csv/version.txt' # Trigger when version.txt is uploaded
+      - 'conversation/csv/version.txt'
 
 jobs:
   log_version_upload:
@@ -13,7 +13,29 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Log Version.txt File Received
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Ensure token is available
         run: |
           mkdir -p conversation/Logs || true # Ensure Logs directory exists
-          echo "$(date +"%Y-%m-%d %H:%M:%S") - Version.txt file received. Initiating final conversion." >> conversation/Logs/workflow_activity.log
-          # NO git add, commit, push here.
+          LOG_FILE="conversation/Logs/workflow_activity.log"
+          echo "$(date +"%Y-%m-%d %H:%M:%S") - Version.txt file received. Initiating final conversion." >> "$LOG_FILE"
+          
+          # Configure Git
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          
+          # Stage the log file
+          git add "$LOG_FILE"
+          
+          # Pull latest changes before committing to avoid conflicts. Rebase might be better here.
+          git pull --rebase origin main || true # Use --rebase to apply local changes on top of remote
+          
+          # Commit the changes (only if there are actual changes to commit)
+          if ! git diff --staged --quiet; then
+              git commit -m "Log: Version.txt received."
+          else
+              echo "No changes to commit from log update."
+          fi
+          
+          # Push the changes. Using --force-with-lease to handle potential race conditions safely.
+          git push --force-with-lease || echo "Push failed for log update (Version.txt)."

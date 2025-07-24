@@ -1,50 +1,50 @@
 # .github/workflows/final_conversion_workflow.yml
-name: Final Conversion Workflow (Triggered by Version File)
+name: Final Conversion Workflow
 
 on:
   push:
     paths:
-      - 'conversation/Temp/version.txt' # Triggers ONLY when version.txt is created/modified and pushed
+      - 'conversation/csv/version.txt' # Trigger when version.txt is uploaded
 
 jobs:
   run_final_conversion:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository and ensure latest
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0 # Fetch all history
 
-      - name: Log Final Conversion Workflow Start
+      - name: Verify scanning.xlsx and version.txt exist
+        id: check_files
         run: |
-          mkdir -p conversation/Logs
-          echo "$(date +"%Y-%m-%d %H:%M:%S") - Final conversion workflow triggered by version.txt." >> conversation/Logs/workflow_activity.log
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add conversation/Logs/workflow_activity.log
-          git commit -m "Log: Final workflow triggered." || echo "No new log entry commit."
-          git push || echo "Log push failed."
-
-      - name: Verify merging_temp.csv and version.txt exist
-        run: |
-          MERGED_CSV="conversation/Temp/merging_temp.csv"
-          VERSION_FILE="conversation/Temp/version.txt"
-          if [ ! -f "$MERGED_CSV" ]; then
-            echo "Error: merging_temp.csv not found. Aborting final conversion."
+          SCANNING_FILE="conversation/csv/scanning.xlsx"
+          VERSION_FILE="conversation/csv/version.txt"
+          
+          if [ ! -f "$SCANNING_FILE" ]; then
+            echo "Error: scanning.xlsx not found. Aborting final conversion."
             exit 1
           fi
           if [ ! -f "$VERSION_FILE" ]; then
             echo "Error: version.txt not found. Aborting final conversion."
             exit 1
           fi
-          echo "Both merging_temp.csv and version.txt found. Proceeding with final conversion."
+          echo "Both scanning.xlsx and version.txt found. Proceeding with final conversion."
+          echo "files_exist=true" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python for Final Conversion
+        if: steps.check_files.outputs.files_exist == 'true'
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
       - name: Install Required Python Packages for Final Conversion
+        if: steps.check_files.outputs.files_exist == 'true'
         run: pip install pandas openpyxl sqlite-utils
 
-      - name: Run Final Conversion (CSV to DB, Zip)
+      - name: Run Final Conversion (CSV to DB, Zip) and Reset Log
+        if: steps.check_files.outputs.files_exist == 'true'
         run: |
           python3 <<EOF
           import pandas as pd
@@ -56,11 +56,12 @@ jobs:
           import sys
 
           try:
-              merged_csv_path = "conversation/Temp/merging_temp.csv"
-              version_file_path = "conversation/Temp/version.txt"
+              scanning_file_path = "conversation/csv/scanning.xlsx" # Only scanning.xlsx
+              version_file_path = "conversation/csv/version.txt"
               log_path = "conversation/Logs/workflow_activity.log"
               
-              os.makedirs("conversation/Ready", exist_ok=True)
+              os.makedirs("conversation/Ready", exist_ok=True) # Ensure Ready directory exists
+              os.makedirs("conversation/Logs", exist_ok=True) # Ensure Logs directory exists
 
               with open(version_file_path, 'r') as f:
                   version_name = f.read().strip() # Read version from file
@@ -69,11 +70,29 @@ jobs:
                   now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
                   logfile.write(f"{now} Final Conversion Started for version: {version_name}.\n")
 
-              merged_df = pd.read_csv(merged_csv_path)
+              # Read the scanning file, it already contains all necessary data including prices
+              df = pd.read_excel(scanning_file_path)
+
+              # Ensure OriginalPrice column is formatted as requested previously
+              if "OriginalPrice" in df.columns:
+                  df["OriginalPrice"] = pd.to_numeric(df["OriginalPrice"], errors='coerce')
+                  def format_price(price):
+                      if pd.isna(price):
+                          return ''
+                      elif isinstance(price, (int, float)) and price == int(price):
+                          return str(int(price))
+                      else:
+                          return str(price)
+                  df["OriginalPrice"] = df["OriginalPrice"].apply(format_price)
+
+              # Define the final columns expected in the DB.
+              # Assuming Scanning.xlsx will contain Barcode, Article, Percentage, OriginalPrice
+              final_columns = ["Barcode", "Article", "Percentage", "OriginalPrice"]
+              df = df[final_columns] # Select and reorder columns
 
               db_target = f"conversation/Ready/{version_name}.db"
               conn = sqlite3.connect(db_target)
-              merged_df.to_sql("sc", conn, if_exists="replace", index=False, dtype={'OriginalPrice': 'TEXT'})
+              df.to_sql("sc", conn, if_exists="replace", index=False, dtype={'OriginalPrice': 'TEXT'})
               conn.commit()
               conn.execute("VACUUM;")
               conn.close()
@@ -96,31 +115,42 @@ jobs:
                   logfile.write(f"{now} DB conversion and zipping complete. Final ZIP created: {os.path.basename(zip_name)}.\n")
                   logfile.write(f"{now} Workflow Finished.\n")
 
+              # Reset the log file by truncating it
+              with open(log_path, "w") as logfile:
+                  logfile.write("") # Overwrite with empty content to make it fresh
+              
           except Exception as e:
               log_path_error = "conversation/Logs/workflow_activity.log"
               with open(log_path_error, "a") as logfile:
                   now = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
                   logfile.write(f"{now} ERROR: Final Conversion Failed: {str(e)}\n")
                   logfile.write(traceback.format_exc())
-              sys.exit(1) # Fail the job if final conversion fails
+              sys.exit(1)
           EOF
         env:
           PYTHONUNBUFFERED: 1
 
-      - name: Clean Up All Source and Temp Files, and Commit Finalized
+      - name: Clean Up Source Files and Commit Finalized Files
+        if: steps.check_files.outputs.files_exist == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           
-          # Add the newly created finalized ZIP file and updated log file
+          # Add the newly created finalized ZIP file and the now-empty log file
           git add conversation/Ready/*.zip
-          git add conversation/Logs/workflow_activity.log
+          git add conversation/Logs/workflow_activity.log # Now empty or fresh
           
-          # Remove all temporary and source files
-          git rm conversation/csv/scanning.xlsx || true
-          git rm conversation/csv/prices.xlsx || true
-          git rm conversation/Temp/merging_temp.csv || true
-          git rm conversation/Temp/version.txt || true
+          # Remove source files
+          git rm conversation/csv/scanning.xlsx || true # Remove scanning.xlsx
+          git rm conversation/csv/version.txt || true   # Remove version.txt
           
-          git commit -m "Finalized: Created ZIP, cleaned up source and temporary files."
-          git push
+          # Commit the changes. Force push to handle potential race conditions if any.
+          if git diff --staged --quiet; then
+              echo "No changes to commit from this final step."
+          else
+              git commit -m "Finalized: Created ZIP, cleaned up source files, and reset log."
+          fi
+          
+          git push --force
